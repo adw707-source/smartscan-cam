@@ -218,6 +218,12 @@ async function checkCameraPermission() {
         }
     }
 }
+     <!-- The UI Button that triggers the JavaScript -->
+<button id="startBtn">Start Camera</button>
+    // Placed at the bottom of the <script> tag
+const startBtn = document.getElementById('startBtn');
+startBtn.addEventListener('click', startCamera); // Calls the function that triggers the popup
 </script>
+ 
 </body>
 </html>
