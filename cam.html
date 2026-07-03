@@ -179,6 +179,45 @@ function closeMe(){if(raf)cancelAnimationFrame(raf);if(stream)stream.getTracks()
 window.onbeforeunload=function(){if(stream)stream.getTracks().forEach(function(t){t.stop();});
   if(window.opener)window.opener.postMessage({src:'ss-cam',type:'closed'},'*');};
 startCam();
+    // ----------THIS IS THE W3C PERMISSIONS API FUNCTION
+async function checkCameraPermission() {
+    if (!navigator.permissions) return 'unknown';
+    
+    // This function queries the W3C Permissions API
+    const result = await navigator.permissions.query({ name: 'camera' });
+    
+    // Returns 'granted', 'denied', or 'prompt' (waiting for user)
+    return result.state; 
+}
+     // ----------THIS IS THE W3C PERMISSIONS API FUNCTION
+    async function startCamera() {
+    // 1. First, we use the W3C API to check the state
+    const permissionState = await checkCameraPermission();
+
+    // If W3C API says it's already denied, don't even try (prevents errors)
+    if (permissionState === 'denied') {
+        showError('Camera permission denied in browser settings.');
+        return;
+    }
+
+    try {
+        // 2. THIS IS THE EXACT FUNCTION THAT TRIGGERS THE BROWSER POPUP
+        // When this line runs, the browser shows the "Allow/Block Camera" dialog.
+        currentStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' },
+            audio: false
+        });
+        
+        // If the user clicks "Allow" in the popup, the code continues here:
+        video.srcObject = currentStream;
+        
+    } catch (err) {
+        // If the user clicks "Block" in the popup, it throws an error caught here:
+        if (err.name === 'NotAllowedError') {
+            showError('Camera permission denied by user.');
+        }
+    }
+}
 </script>
 </body>
 </html>
