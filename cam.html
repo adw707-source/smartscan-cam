@@ -34,8 +34,8 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
 #scan-strip-count{display:inline-block;background:rgba(76,194,255,.15);color:#4CC2FF;border-radius:20px;padding:1px 7px;margin-left:5px;font-size:10px;}
 #scan-strip-close{background:rgba(255,255,255,.06);border:none;color:rgba(255,255,255,.5);font-size:10px;padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit;}
 #scan-strip-close:hover{background:rgba(239,68,68,.15);color:#f87171;}
-#scan-strip-export{background:rgba(76,194,255,.12);border:none;color:#4CC2FF;font-size:10px;padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit;}
-#scan-strip-export:hover{background:rgba(76,194,255,.25);}
+#r-export-all{background:rgba(76,194,255,.12);border:none;color:#4CC2FF;font-size:9.5px;padding:4px 8px;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0;}
+#r-export-all:hover{background:rgba(76,194,255,.25);}
 #scan-strip{display:flex;gap:6px;overflow-x:auto;padding:0 10px 8px;flex:1;}
 .ss-item{flex-shrink:0;width:64px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:5px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);position:relative;}
 .ss-item-copy{position:absolute;bottom:2px;right:2px;width:18px;height:18px;border-radius:5px;border:none;background:rgba(76,194,255,.15);color:#4CC2FF;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s;}
@@ -130,7 +130,11 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
 /* status bar */
 #sbar{height:22px;background:rgba(0,0,0,.2);border-top:1px solid rgba(255,255,255,.05);display:flex;align-items:center;padding:0 12px;gap:14px;flex-shrink:0;}
 #sbar span{font-size:10px;color:rgba(255,255,255,.28);}
-@media(max-width:640px){#right{width:100%;position:absolute;bottom:0;height:40%;border-left:none;border-top:1px solid rgba(255,255,255,.1);z-index:5;}#left{padding-bottom:40%;}}
+@media(max-width:640px){
+  #body{flex-direction:column;}
+  #right{width:100%;height:150px;border-left:none;border-top:1px solid rgba(255,255,255,.1);flex-shrink:0;}
+  #cam-viewport{min-height:220px;}
+}
 </style>
 </head>
 <body>
@@ -182,10 +186,7 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
       <div id="scan-strip-wrap">
         <div id="scan-strip-hdr">
           <span id="scan-strip-title">Scanned Codes <span id="scan-strip-count">0</span></span>
-          <div style="display:flex;gap:6px;">
-            <button id="scan-strip-export" onclick="exportAllScans()" title="Export all scans">&#128190; Export</button>
-            <button id="scan-strip-close" onclick="clearScanStrip()" title="Clear all">&#128465; Clear</button>
-          </div>
+          <button id="scan-strip-close" onclick="clearScanStrip()" title="Clear all">&#128465; Clear</button>
         </div>
         <div id="scan-strip"></div>
       </div>
@@ -231,7 +232,10 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
   <!-- RESULT PANEL -->
   <div id="right">
     <div id="r-hdr">
-      <div id="r-title">Latest Result</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
+        <div id="r-title" style="margin-bottom:0;">Latest Result</div>
+        <button id="r-export-all" onclick="exportAllScans()" title="Export all scanned codes (camera + paste + upload)">&#128190; Export All</button>
+      </div>
       <div id="r-badge" class="empty">Waiting...</div>
     </div>
     <div id="r-body">
@@ -299,11 +303,18 @@ function swTab(id){
 }
 
 /* ── Engine ── */
-var _engInitStarted=false,_engInitCbs=[];
-function fireAll(){ var cbs=_engInitCbs; _engInitCbs=[]; cbs.forEach(function(f){f();}); }
+var _engInitStarted=false,_engInitCbs=[],_engResolved=false;
+function fireAll(){ _engResolved=true; var cbs=_engInitCbs; _engInitCbs=[]; cbs.forEach(function(f){f();}); }
 function initEng(cb){
+  // If the engine already finished loading (e.g. returning to the Camera
+  // tab after the first successful start), fire immediately — previously
+  // this callback was pushed into a queue that only ever got flushed
+  // ONCE (on the very first load), so every subsequent call to initEng()
+  // silently did nothing, forever. That was why the camera never
+  // restarted when switching back to the Camera tab.
+  if(_engResolved){ cb(); return; }
   _engInitCbs.push(cb);
-  if(_engInitStarted) return; // already loading/loaded — just queue the callback
+  if(_engInitStarted) return; // already loading — just queue the callback
   _engInitStarted=true;
 
   var nativeChecked=false;
@@ -666,16 +677,16 @@ function startCamZxing(){
 function runZxingDecode(deviceId){
   zxingReader.decodeFromVideoDevice(deviceId,'vid',function(result,err){
     if(result){
-      var pts=null;
-      try{
-        var rp=result.getResultPoints();
-        if(rp&&rp.length) pts=rp.map(function(p){return{x:p.getX(),y:p.getY()};});
-      }catch(e2){}
-      var v=$e('vid');
-      if(pts&&v) drawDetBox(pts,v);
       var text=result.getText(),fmt=String(result.getBarcodeFormat());
       if(text!==last){
         last=text;beep();
+        var pts=null;
+        try{
+          var rp=result.getResultPoints();
+          if(rp&&rp.length) pts=rp.map(function(p){return{x:p.getX(),y:p.getY()};});
+        }catch(e2){}
+        var v=$e('vid');
+        if(pts&&v) drawDetBox(pts,v); // only draw once per NEW detection
         $e('badge').textContent='\u2713 Found!';$e('badge').className='found';
         showRes(text,fmt,true);
         setTimeout(function(){$e('badge').textContent='Scanning...';$e('badge').className='';last='';clearDetBox();},700);
@@ -903,15 +914,15 @@ function scan(){raf=requestAnimationFrame(function(){
       scanCanvas.getContext('2d').drawImage(v,0,0,cw,ch);
       dec(scanCanvas,function(r){
         if(r&&r.t){
-          // Map detection points back up to native video-pixel space if
-          // we scanned a downscaled frame.
-          var pts=r.pts;
-          if(pts&&scaleDown!==1){
-            pts=pts.map(function(p){return{x:p.x/scaleDown,y:p.y/scaleDown};});
-          }
-          drawDetBox(pts,v);
           if(r.t!==last){
             last=r.t;beep();
+            // Map detection points back up to native video-pixel space if
+            // we scanned a downscaled frame.
+            var pts=r.pts;
+            if(pts&&scaleDown!==1){
+              pts=pts.map(function(p){return{x:p.x/scaleDown,y:p.y/scaleDown};});
+            }
+            drawDetBox(pts,v); // only draw once per NEW detection
             $e('badge').textContent='\u2713 Found!';$e('badge').className='found';
             showRes(r.t,r.f,true);
             // Clear quickly so the camera is "ready" again and the SAME
