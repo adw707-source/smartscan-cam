@@ -238,23 +238,44 @@ function swTab(id){
 
 /* ── Engine ── */
 var _engInitStarted=false,_engInitCbs=[];
+function fireAll(){ var cbs=_engInitCbs; _engInitCbs=[]; cbs.forEach(function(f){f();}); }
 function initEng(cb){
   _engInitCbs.push(cb);
   if(_engInitStarted) return; // already loading/loaded — just queue the callback
   _engInitStarted=true;
-  function fireAll(){ var cbs=_engInitCbs; _engInitCbs=[]; cbs.forEach(function(f){f();}); }
 
   if(typeof BarcodeDetector!=='undefined'){
-    try{det=new BarcodeDetector({formats:['qr_code','ean_13','ean_8','code_128','code_39','code_93','data_matrix','pdf417','upc_a','upc_e','itf','aztec','codabar']});
-    eng='native';setEng('Native');fireAll();return;}catch(e){}}
+    BarcodeDetector.getSupportedFormats().then(function(supported){
+      var wanted=['qr_code','ean_13','ean_8','code_128','code_39','code_93','data_matrix','pdf417','upc_a','upc_e','itf','aztec','codabar'];
+      var usable=wanted.filter(function(f){return supported.indexOf(f)!==-1;});
+      var hasBarcode=usable.some(function(f){return f!=='qr_code';});
+      if(usable.length){
+        try{
+          det=new BarcodeDetector({formats:usable});
+          eng='native';
+          setEng(hasBarcode?'Native':'Native (QR only)');
+          fireAll();
+          return;
+        }catch(e){}
+      }
+      // Native exists but doesn't actually support any of our formats on
+      // this platform — fall through to ZXing for full barcode coverage.
+      loadFallbackEngines();
+    }).catch(function(){ loadFallbackEngines(); });
+    return;
+  }
+  loadFallbackEngines();
+}
 
+function loadFallbackEngines(){
   // Try ZXing (QR + all barcode formats) from multiple CDN mirrors —
   // if the primary CDN is blocked by a firewall/proxy, fall through to
   // alternates before giving up on it entirely.
   var zxingUrls=[
-    'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.1/umd/index.min.js',
     'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.1/umd/index.min.js',
-    'https://unpkg.com/@zxing/library@0.21.1/umd/index.min.js'
+    'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.1/umd/index.min.js',
+    'https://unpkg.com/@zxing/library@0.21.1/umd/index.min.js',
+    'https://esm.sh/@zxing/library@0.21.1/umd/index.min.js'
   ];
   var jsqrUrls=[
     'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
@@ -267,7 +288,7 @@ function initEng(cb){
     var s=document.createElement('script');
     s.src=urls[idx];
     var done=false;
-    var timer=setTimeout(function(){ if(!done){done=true;s.onerror=s.onload=null;tryLoad(urls,idx+1,onOk,onAllFail);} },4000);
+    var timer=setTimeout(function(){ if(!done){done=true;s.onerror=s.onload=null;tryLoad(urls,idx+1,onOk,onAllFail);} },5000);
     s.onload=function(){ if(done)return; done=true; clearTimeout(timer); onOk(); };
     s.onerror=function(){ if(done)return; done=true; clearTimeout(timer); tryLoad(urls,idx+1,onOk,onAllFail); };
     document.head.appendChild(s);
@@ -293,7 +314,22 @@ function initEng(cb){
     fireAll();
   }
 }
-function setEng(l){$e('heng').textContent=l;$e('sb-eng').textContent='Engine: '+l;}
+function setEng(l){
+  var b=$e('heng');
+  b.textContent=l;
+  $e('sb-eng').textContent='Engine: '+l;
+  // Color-code + warn clearly when barcodes (not just QR) are NOT
+  // supported, so the user isn't left guessing why a barcode won't scan.
+  if(l==='Native'||l==='ZXing'){
+    b.style.background='rgba(74,222,128,.15)';b.style.color='#4ade80';
+  } else if(l==='jsQR'){
+    b.style.background='rgba(251,191,36,.15)';b.style.color='#fbbf24';
+    b.textContent='QR only';
+    b.title='Barcode library (ZXing) could not load — only QR codes will scan, not 1D barcodes.';
+  } else if(l==='Offline'){
+    b.style.background='rgba(239,68,68,.15)';b.style.color='#f87171';
+  }
+}
 
 /* ── Decode ── */
 function dec(canvas,cb){
@@ -418,6 +454,10 @@ function startCam(withFS){
   $e('start-scr').style.display='none';
   $e('cam-err').style.display='none';
   $e('loading').style.display='flex';
+  // Defensive cleanup — if a previous stream handle is still around
+  // (e.g. from a retry after a timeout), fully release it first so the
+  // new getUserMedia call doesn't fight over the same camera resource.
+  if(stream){ try{stream.getTracks().forEach(function(t){t.stop();});}catch(e0){} stream=null; }
   /* Auto-fullscreen on user gesture for app feel */
   if(withFS&&!fsMode){
     try{
@@ -464,6 +504,17 @@ function startCam(withFS){
     }).catch(function(pe){showCamErr('&#128683;','Playback Error',pe.message||'Failed',true);});};
   })
   .catch(function(e){
+    // Chrome sometimes throws AbortError with "Timeout starting video
+    // source" right after a hard refresh — the camera hasn't finished
+    // releasing from the previous page load yet. This is transient, so
+    // auto-retry a couple of times with a short delay before showing
+    // any error to the user.
+    if((e.name==='AbortError'||/timeout/i.test(e.message||''))&&camRetries<2){
+      camRetries++;
+      $e('ld-txt').textContent='Camera busy, retrying... ('+camRetries+'/2)';
+      setTimeout(function(){startCam();},1200);
+      return;
+    }
     var ico,title,msg,retry=true;
     if(e.name==='NotAllowedError'||e.name==='PermissionDeniedError'){
       ico='&#128274;';title='Camera Access Denied';
@@ -472,11 +523,16 @@ function startCam(withFS){
       msg='No camera detected.\n\u2022 Check Device Manager\n\u2022 Install driver\n\u2022 Try external webcam\n\nOr use Paste/Upload tabs.';retry=false;}
     else if(e.name==='NotReadableError'){ico='&#127906;';title='Shutter Closed / In Use';
       msg='\u2022 Open camera shutter (Lenovo/Dell/HP)\n\u2022 Close Zoom/Teams/Meet\n\u2022 Restart browser';}
+    else if(e.name==='AbortError'||/timeout/i.test(e.message||'')){
+      ico='&#8987;';title='Camera Timed Out';
+      msg='The camera did not respond in time.\n\u2022 Close any other app/tab using the camera (Zoom, Teams, Meet, another browser tab)\n\u2022 Wait a few seconds and tap Try Again\n\u2022 If this keeps happening, restart the browser';}
     else{ico='&#9888;&#65039;';title='Camera Error';msg=e.message||e.name||'Unknown';}
+    camRetries=0;
     showCamErr(ico,title,msg,retry);
   });
 }
 var lt=0;
+var camRetries=0;
 var scanCanvas=document.createElement('canvas'); // reused each frame — avoids GC churn, faster
 function mapPtToOverlay(p,vw,vh,dw,dh){
   var scale=Math.max(dw/vw,dh/vh);
