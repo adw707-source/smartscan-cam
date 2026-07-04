@@ -46,11 +46,11 @@ body{background:#0a0e1a;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
 #overlay{position:absolute;inset:0;pointer-events:none;display:none;z-index:2;}
 #frm{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(70vw,280px);height:min(70vw,280px);}
 .cor{position:absolute;width:22px;height:22px;}
-.cor.tl{top:0;left:0;border-top:2.5px solid rgba(76,194,255,.5);border-left:2.5px solid rgba(76,194,255,.5);border-radius:4px 0 0 0;}
-.cor.tr{top:0;right:0;border-top:2.5px solid rgba(76,194,255,.5);border-right:2.5px solid rgba(76,194,255,.5);border-radius:0 4px 0 0;}
-.cor.bl{bottom:0;left:0;border-bottom:2.5px solid rgba(76,194,255,.5);border-left:2.5px solid rgba(76,194,255,.5);border-radius:0 0 0 4px;}
-.cor.br{bottom:0;right:0;border-bottom:2.5px solid rgba(76,194,255,.5);border-right:2.5px solid rgba(76,194,255,.5);border-radius:0 0 4px 0;}
-#sline{position:absolute;left:8px;right:8px;height:2px;background:linear-gradient(90deg,transparent,rgba(76,194,255,.7),transparent);box-shadow:0 0 10px rgba(76,194,255,.3);animation:sc 2s ease-in-out infinite;}
+.cor.tl{top:0;left:0;border-top:2.5px solid rgba(76,194,255,.35);border-left:2.5px solid rgba(76,194,255,.35);border-radius:4px 0 0 0;}
+.cor.tr{top:0;right:0;border-top:2.5px solid rgba(76,194,255,.35);border-right:2.5px solid rgba(76,194,255,.35);border-radius:0 4px 0 0;}
+.cor.bl{bottom:0;left:0;border-bottom:2.5px solid rgba(76,194,255,.35);border-left:2.5px solid rgba(76,194,255,.35);border-radius:0 0 0 4px;}
+.cor.br{bottom:0;right:0;border-bottom:2.5px solid rgba(76,194,255,.35);border-right:2.5px solid rgba(76,194,255,.35);border-radius:0 0 4px 0;}
+#sline{position:absolute;left:8px;right:8px;height:2px;background:linear-gradient(90deg,transparent,rgba(76,194,255,.5),transparent);box-shadow:0 0 10px rgba(76,194,255,.2);animation:sc 2.2s ease-in-out infinite;}
 @keyframes sc{0%{top:6px;opacity:0}10%{opacity:1}90%{opacity:1}100%{top:calc(100% - 8px);opacity:0}}
 
 /* ── Status Badge ── */
@@ -299,8 +299,7 @@ body{background:#0a0e1a;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
 'use strict';
 
 /* ════════════════════════════════════════════════════════════════════
-   SMARTSCAN PRO — Complete Scanning Engine
-   Features: Multi-engine fallback, ROI, Frame-skipping, Zoom, Glass UI
+   SMARTSCAN PRO — Full Frame + Low-Light Optimized
 ═══════════════════════════════════════════════════════════════════════ */
 
 var stream=null, raf=null, last='', facing='environment';
@@ -407,37 +406,57 @@ function setEng(label){
   if(sb) sb.textContent='⚡ Engine: '+label;
 }
 
-/* ── Universal Decode ── */
+/* ── Image Enhancement for Low Light ── */
+function enhanceImage(canvas) {
+  var ctx = canvas.getContext('2d');
+  var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  var data = imageData.data;
+  var len = data.length;
+  var sum = 0;
+  for (var i = 0; i < len; i += 4) {
+    sum += data[i] + data[i+1] + data[i+2];
+  }
+  var avg = sum / (len / 4 * 3);
+  if (avg < 80) {
+    var brightness = 50;
+    var contrast = 30;
+    var factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+    for (var j = 0; j < len; j += 4) {
+      data[j] = Math.min(255, Math.max(0, factor * (data[j] - 128) + 128 + brightness));
+      data[j+1] = Math.min(255, Math.max(0, factor * (data[j+1] - 128) + 128 + brightness));
+      data[j+2] = Math.min(255, Math.max(0, factor * (data[j+2] - 128) + 128 + brightness));
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+  return canvas;
+}
+
+/* ── Universal Decode (Full Frame) ── */
 function decodeCanvas(canvas, cb){
-  if(!ENGINE.ready){ setTimeout(function(){ decodeCanvas(canvas, cb); },100); return; }
+  if(!ENGINE.ready){ 
+    // Wait for engine
+    setTimeout(function(){ decodeCanvas(canvas, cb); }, 100);
+    return;
+  }
 
-  // ROI: use only center 60% for speed
-  var roiW = Math.round(canvas.width * 0.6);
-  var roiH = Math.round(canvas.height * 0.6);
-  var startX = Math.round((canvas.width - roiW) / 2);
-  var startY = Math.round((canvas.height - roiH) / 2);
-
-  var roiCanvas = document.createElement('canvas');
-  roiCanvas.width = roiW;
-  roiCanvas.height = roiH;
-  var ctx = roiCanvas.getContext('2d');
-  ctx.drawImage(canvas, startX, startY, roiW, roiH, 0, 0, roiW, roiH);
+  // Enhance image for low light
+  canvas = enhanceImage(canvas);
 
   if(ENGINE.current === 'native'){
-    det.detect(roiCanvas).then(function(r){
+    det.detect(canvas).then(function(r){
       cb(r && r.length>0 ? {t:r[0].rawValue, f:String(r[0].format)} : null);
     }).catch(function(){ cb(null); });
     return;
   }
 
-  var d = roiCanvas.getContext('2d').getImageData(0,0,roiCanvas.width,roiCanvas.height);
+  var d = canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
 
   if(ENGINE.current === 'zxing'){
     try {
       var r = new ZXing.MultiFormatReader().decode(
         new ZXing.BinaryBitmap(
           new ZXing.HybridBinarizer(
-            new ZXing.RGBLuminanceSource(d.data, roiCanvas.width, roiCanvas.height)
+            new ZXing.RGBLuminanceSource(d.data, canvas.width, canvas.height)
           )
         )
       );
@@ -447,7 +466,7 @@ function decodeCanvas(canvas, cb){
   }
 
   if(ENGINE.current === 'jsqr'){
-    var q = jsQR(d.data, roiCanvas.width, roiCanvas.height, {inversionAttempts:'dontInvert'});
+    var q = jsQR(d.data, canvas.width, canvas.height, {inversionAttempts:'dontInvert'});
     cb(q ? {t:q.data, f:'QR_CODE'} : null);
     return;
   }
@@ -572,7 +591,7 @@ function startCam(withFS){
           var px=c.getContext('2d').getImageData(0,0,160,120).data;
           var sum=0; for(var i=0;i<px.length;i+=4) sum+=px[i]+px[i+1]+px[i+2];
           var avg=sum/(px.length/4*3);
-          if(avg<2){ showCamErr('🎥','Camera Covered','Camera feed is black.\n\n• Open camera shutter/cover\n• Check if camera is enabled\n• Close other camera apps\n\nTap Try Again.',true); return; }
+          if(avg<3){ showCamErr('🎥','Camera Covered','Camera feed is black.\n\n• Open camera shutter/cover\n• Check if camera is enabled\n• Close other camera apps\n\nTap Try Again.',true); return; }
           if(l) l.style.display='none';
           var o=$e('overlay'), bg=$e('badge'), ct=$e('cam-ctl'), zw=$e('zoom-wrap');
           if(o) o.style.display='block'; if(bg) bg.style.display='block'; if(ct) ct.style.display='flex'; if(zw) zw.classList.add('show');
@@ -605,9 +624,8 @@ function scan(){
     var now=Date.now(); if(now-lt>66){ lt=now;
       var v=$e('vid');
       if(v && v.readyState>=2 && v.videoWidth>0){
-        // Frame skipping — process every 2nd frame
         frameCounter++;
-        if(frameCounter % 2 === 0){
+        if(frameCounter % 3 === 0){
           var c=document.createElement('canvas');
           c.width=v.videoWidth; c.height=v.videoHeight;
           c.getContext('2d').drawImage(v,0,0);
@@ -620,7 +638,6 @@ function scan(){
             }
           });
         }
-        // FPS counter
         fpsCount++; if(now-fpsTime>1000){ currentFps=fpsCount; fpsCount=0; fpsTime=now; var fps=$e('sb-fps'); if(fps) fps.textContent='FPS: '+currentFps; }
       }
     }
@@ -655,56 +672,83 @@ function applyZoom(val){
   var lbl=$e('zoom-label'); if(lbl) lbl.textContent=val+'x';
 }
 
-function closeMe(){
-  if(raf) cancelAnimationFrame(raf);
-  if(stream) stream.getTracks().forEach(function(t){ t.stop(); });
-  window.close();
-}
-window.onbeforeunload=function(){ if(stream) stream.getTracks().forEach(function(t){ t.stop(); }); };
-
-/* ── Paste ── */
-document.addEventListener('paste',function(e){
-  var items=e.clipboardData&&e.clipboardData.items; if(!items) return;
-  for(var i=0;i<items.length;i++){
-    if(items[i].type.indexOf('image')!==-1){
+/* ── PASTE ── */
+function handlePaste(e) {
+  var items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].type.indexOf('image') !== -1) {
       swTab('paste');
-      var blob=items[i].getAsFile(); var url=URL.createObjectURL(blob); var img=new Image();
-      img.onload=function(){
-        var p=$e('paste-prev'), sc=$e('paste-sc');
-        if(p){ p.src=img.src; p.style.display='block'; }
-        if(sc) sc.style.display='flex';
-        var c=document.createElement('canvas'); c.width=img.naturalWidth; c.height=img.naturalHeight;
-        c.getContext('2d').drawImage(img,0,0);
-        decodeCanvas(c,function(r){
-          if(sc) sc.style.display='none';
-          if(r && r.t){ beep(); showRes(r.t,r.f,true); }
-          else { var b=$e('r-badge'); if(b){ b.className='error'; b.textContent='No code found'; } }
-        });
-      }; img.src=url; break;
+      var blob = items[i].getAsFile();
+      var url = URL.createObjectURL(blob);
+      var img = new Image();
+      img.onload = function() {
+        var prev = $e('paste-prev');
+        var sc = $e('paste-sc');
+        if (prev) { prev.src = img.src; prev.style.display = 'block'; }
+        if (sc) sc.style.display = 'flex';
+        var c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        // Make sure engine is ready before scanning
+        function doScan() {
+          if (!ENGINE.ready) { setTimeout(doScan, 200); return; }
+          decodeCanvas(c, function(r) {
+            if (sc) sc.style.display = 'none';
+            if (r && r.t) { beep(); showRes(r.t, r.f, true); }
+            else { var b = $e('r-badge'); if (b) { b.className = 'error'; b.textContent = 'No code found'; } }
+          });
+        }
+        doScan();
+      };
+      img.src = url;
+      break;
     }
   }
-});
+}
+document.addEventListener('paste', handlePaste);
 
-/* ── Upload ── */
-function onFile(e){ var f=e.target.files&&e.target.files[0]; if(f) procFile(f); }
-function onDrop(e){ e.preventDefault(); var dz=e.target.closest('.dz'); if(dz) dz.classList.remove('drag');
-  var f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f&&f.type.indexOf('image')!==-1) procFile(f); }
-function procFile(file){
-  var rd=new FileReader();
-  rd.onload=function(ev){ var img=new Image();
-    img.onload=function(){
-      var p=$e('up-prev'), sc=$e('up-sc');
-      if(p){ p.src=img.src; p.style.display='block'; }
-      if(sc) sc.style.display='flex';
-      var c=document.createElement('canvas'); c.width=img.naturalWidth; c.height=img.naturalHeight;
-      c.getContext('2d').drawImage(img,0,0);
-      decodeCanvas(c,function(r){
-        if(sc) sc.style.display='none';
-        if(r && r.t){ beep(); showRes(r.t,r.f,true); }
-        else { var b=$e('r-badge'); if(b){ b.className='error'; b.textContent='No code found'; } }
-      });
-    }; img.src=ev.target.result;
-  }; rd.readAsDataURL(file);
+/* ── UPLOAD ── */
+function onFile(e) {
+  var f = e.target.files && e.target.files[0];
+  if (f) procFile(f);
+}
+
+function onDrop(e) {
+  e.preventDefault();
+  var dz = e.target.closest('.dz');
+  if (dz) dz.classList.remove('drag');
+  var f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f && f.type.indexOf('image') !== -1) procFile(f);
+}
+
+function procFile(file) {
+  var rd = new FileReader();
+  rd.onload = function(ev) {
+    var img = new Image();
+    img.onload = function() {
+      var prev = $e('up-prev');
+      var sc = $e('up-sc');
+      if (prev) { prev.src = img.src; prev.style.display = 'block'; }
+      if (sc) sc.style.display = 'flex';
+      var c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      function doScan() {
+        if (!ENGINE.ready) { setTimeout(doScan, 200); return; }
+        decodeCanvas(c, function(r) {
+          if (sc) sc.style.display = 'none';
+          if (r && r.t) { beep(); showRes(r.t, r.f, true); }
+          else { var b = $e('r-badge'); if (b) { b.className = 'error'; b.textContent = 'No code found'; } }
+        });
+      }
+      doScan();
+    };
+    img.src = ev.target.result;
+  };
+  rd.readAsDataURL(file);
 }
 
 /* ── Auto-start if permission already granted ── */
