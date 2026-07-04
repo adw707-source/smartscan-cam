@@ -129,6 +129,7 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
     <!-- CAMERA -->
     <div class="page show" id="pg-cam">
       <video id="vid" autoplay playsinline muted webkit-playsinline></video>
+      <canvas id="detCanvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3;"></canvas>
       <div id="overlay">
         <div id="cut"></div>
         <div id="frm"><div class="cor tl"></div><div class="cor tr"></div><div class="cor bl"></div><div class="cor br"></div><div id="sline"></div></div>
@@ -252,10 +253,44 @@ function setEng(l){$e('heng').textContent=l;$e('sb-eng').textContent='Engine: '+
 
 /* ── Decode ── */
 function dec(canvas,cb){
-  if(eng==='native'){det.detect(canvas).then(function(r){cb(r&&r[0]?{t:r[0].rawValue,f:String(r[0].format)}:null);}).catch(function(){cb(null);});return;}
+  if(eng==='native'){
+    det.detect(canvas).then(function(r){
+      if(r&&r[0]){
+        var pts=r[0].cornerPoints||null;
+        cb({t:r[0].rawValue,f:String(r[0].format),pts:pts});
+      } else cb(null);
+    }).catch(function(){cb(null);});
+    return;
+  }
   var d=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
-  if(eng==='zxing'){try{var r=new ZXing.MultiFormatReader().decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(d.data,canvas.width,canvas.height))));cb({t:r.getText(),f:String(r.getBarcodeFormat())});}catch(e){cb(null);}return;}
-  if(eng==='jsqr'){var q=jsQR(d.data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'});cb(q?{t:q.data,f:'QR_CODE'}:null);return;}
+  if(eng==='zxing'){
+    try{
+      var reader=new ZXing.MultiFormatReader();
+      var bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(d.data,canvas.width,canvas.height)));
+      var r=reader.decode(bmp);
+      var rp=null;
+      try{
+        var pts=r.getResultPoints();
+        if(pts&&pts.length){rp=pts.map(function(p){return{x:p.getX(),y:p.getY()};});}
+      }catch(e2){}
+      cb({t:r.getText(),f:String(r.getBarcodeFormat()),pts:rp});
+    }catch(e){cb(null);}
+    return;
+  }
+  if(eng==='jsqr'){
+    var q=jsQR(d.data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'});
+    if(q){
+      var loc=q.location;
+      var pts=loc?[
+        {x:loc.topLeftCorner.x,y:loc.topLeftCorner.y},
+        {x:loc.topRightCorner.x,y:loc.topRightCorner.y},
+        {x:loc.bottomRightCorner.x,y:loc.bottomRightCorner.y},
+        {x:loc.bottomLeftCorner.x,y:loc.bottomLeftCorner.y}
+      ]:null;
+      cb({t:q.data,f:'QR_CODE',pts:pts});
+    } else cb(null);
+    return;
+  }
   cb(null);
 }
 
@@ -398,15 +433,75 @@ function startCam(withFS){
   });
 }
 var lt=0;
+var scanCanvas=document.createElement('canvas'); // reused each frame — avoids GC churn, faster
+function mapPtToOverlay(p,vw,vh,dw,dh){
+  var scale=Math.max(dw/vw,dh/vh);
+  var offX=(dw-vw*scale)/2, offY=(dh-vh*scale)/2;
+  return {x:p.x*scale+offX, y:p.y*scale+offY};
+}
+function drawDetBox(pts,v){
+  var oc=$e('detCanvas'); if(!oc) return;
+  var dw=oc.clientWidth,dh=oc.clientHeight;
+  if(oc.width!==dw||oc.height!==dh){oc.width=dw;oc.height=dh;}
+  var ctx=oc.getContext('2d');
+  ctx.clearRect(0,0,dw,dh);
+  if(!pts||!pts.length) return;
+  var mapped=pts.map(function(p){return mapPtToOverlay(p,v.videoWidth,v.videoHeight,dw,dh);});
+  ctx.beginPath();
+  ctx.moveTo(mapped[0].x,mapped[0].y);
+  for(var i=1;i<mapped.length;i++) ctx.lineTo(mapped[i].x,mapped[i].y);
+  ctx.closePath();
+  ctx.strokeStyle='#34d399';
+  ctx.lineWidth=3;
+  ctx.shadowColor='rgba(52,211,153,.8)';
+  ctx.shadowBlur=8;
+  ctx.stroke();
+  // small corner dots, Lens-style
+  ctx.shadowBlur=0;
+  mapped.forEach(function(m){
+    ctx.beginPath();ctx.arc(m.x,m.y,4,0,Math.PI*2);ctx.fillStyle='#34d399';ctx.fill();
+  });
+}
+function clearDetBox(){
+  var oc=$e('detCanvas'); if(!oc) return;
+  oc.getContext('2d').clearRect(0,0,oc.width,oc.height);
+}
 function scan(){raf=requestAnimationFrame(function(){
-  var now=Date.now();if(now-lt>66){lt=now;
-    var v=$e('vid');if(v.readyState>=2&&v.videoWidth>0){
-      var c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;
-      c.getContext('2d').drawImage(v,0,0);
-      dec(c,function(r){if(r&&r.t&&r.t!==last){last=r.t;beep();
-        $e('badge').textContent='\u2713 Found!';$e('badge').className='found';
-        showRes(r.t,r.f,true);
-        setTimeout(function(){$e('badge').textContent='Scanning...';$e('badge').className='';last='';},3000);}});}}
+  var now=Date.now();
+  // 40ms throttle (~25 decode attempts/sec) — fast, Lens-like responsiveness.
+  // Native BarcodeDetector easily keeps up; ZXing/jsQR use a downscaled
+  // frame below to stay quick on slower devices.
+  if(now-lt>40){lt=now;
+    var v=$e('vid');
+    if(v.readyState>=2&&v.videoWidth>0){
+      var vw=v.videoWidth,vh=v.videoHeight;
+      // Downscale for the heavier JS decoders (ZXing/jsQR) to keep frame
+      // processing fast; native BarcodeDetector can use full resolution.
+      var scaleDown = (eng==='native') ? 1 : Math.min(1, 640/Math.max(vw,vh));
+      var cw=Math.round(vw*scaleDown), ch=Math.round(vh*scaleDown);
+      scanCanvas.width=cw; scanCanvas.height=ch;
+      scanCanvas.getContext('2d').drawImage(v,0,0,cw,ch);
+      dec(scanCanvas,function(r){
+        if(r&&r.t){
+          // Map detection points back up to native video-pixel space if
+          // we scanned a downscaled frame.
+          var pts=r.pts;
+          if(pts&&scaleDown!==1){
+            pts=pts.map(function(p){return{x:p.x/scaleDown,y:p.y/scaleDown};});
+          }
+          drawDetBox(pts,v);
+          if(r.t!==last){
+            last=r.t;beep();
+            $e('badge').textContent='\u2713 Found!';$e('badge').className='found';
+            showRes(r.t,r.f,true);
+            setTimeout(function(){$e('badge').textContent='Scanning...';$e('badge').className='';last='';},1500);
+          }
+        } else {
+          clearDetBox();
+        }
+      });
+    }
+  }
   scan();});}
 function flipCam(){facing=facing==='environment'?'user':'environment';
   if(stream)stream.getTracks().forEach(function(t){t.stop();});stream=null;
