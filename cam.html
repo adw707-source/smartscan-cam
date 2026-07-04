@@ -34,8 +34,13 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
 #scan-strip-count{display:inline-block;background:rgba(76,194,255,.15);color:#4CC2FF;border-radius:20px;padding:1px 7px;margin-left:5px;font-size:10px;}
 #scan-strip-close{background:rgba(255,255,255,.06);border:none;color:rgba(255,255,255,.5);font-size:10px;padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit;}
 #scan-strip-close:hover{background:rgba(239,68,68,.15);color:#f87171;}
+#scan-strip-export{background:rgba(76,194,255,.12);border:none;color:#4CC2FF;font-size:10px;padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit;}
+#scan-strip-export:hover{background:rgba(76,194,255,.25);}
 #scan-strip{display:flex;gap:6px;overflow-x:auto;padding:0 10px 8px;flex:1;}
 .ss-item{flex-shrink:0;width:64px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:5px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);position:relative;}
+.ss-item-copy{position:absolute;bottom:2px;right:2px;width:18px;height:18px;border-radius:5px;border:none;background:rgba(76,194,255,.15);color:#4CC2FF;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s;}
+.ss-item:hover .ss-item-copy{opacity:1;}
+.ss-item-copy:hover{background:rgba(76,194,255,.3);}
 .ss-item:hover{background:rgba(76,194,255,.08);border-color:rgba(76,194,255,.25);}
 .ss-item.active{background:rgba(76,194,255,.14);border-color:#4CC2FF;}
 .ss-item-ico{font-size:18px;}
@@ -177,7 +182,10 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
       <div id="scan-strip-wrap">
         <div id="scan-strip-hdr">
           <span id="scan-strip-title">Scanned Codes <span id="scan-strip-count">0</span></span>
-          <button id="scan-strip-close" onclick="clearScanStrip()" title="Clear all">&#128465; Clear</button>
+          <div style="display:flex;gap:6px;">
+            <button id="scan-strip-export" onclick="exportAllScans()" title="Export all scans">&#128190; Export</button>
+            <button id="scan-strip-close" onclick="clearScanStrip()" title="Clear all">&#128465; Clear</button>
+          </div>
         </div>
         <div id="scan-strip"></div>
       </div>
@@ -270,7 +278,7 @@ function swTab(id){
     // while its app is in the foreground.
     camWasActive = !!stream;
     if(raf){cancelAnimationFrame(raf);raf=null;}
-    if(stream){stream.getTracks().forEach(function(t){t.stop();});stream=null;}
+    if(stream){stream.getTracks().forEach(function(t){t.stop();});stream=null;}if(zxingReader){try{zxingReader.reset();}catch(e){}}
     $e('vid').style.display='none';
     $e('overlay').style.display='none';
     $e('badge').style.display='none';
@@ -335,24 +343,16 @@ function initEng(cb){
 }
 
 function loadFallbackEngines(){
-  // Try ZXing (QR + all barcode formats) from multiple CDN mirrors —
-  // if the primary CDN is blocked by a firewall/proxy, fall through to
-  // alternates before giving up on it entirely.
+  // ZXing covers QR + all barcode formats reliably via its own high-level
+  // API (BrowserMultiFormatReader.decodeFromVideoDevice/decodeFromImageUrl)
+  // — this is the SAME proven API confirmed working in a tested reference
+  // build, so it's now the single, simpler fallback (Quagga/jsQR removed
+  // as redundant — ZXing alone handles both use cases).
   var zxingUrls=[
+    'https://unpkg.com/@zxing/library@latest',
     'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.1/umd/index.min.js',
     'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.1/umd/index.min.js',
-    'https://unpkg.com/@zxing/library@0.21.1/umd/index.min.js',
     'https://esm.sh/@zxing/library@0.21.1/umd/index.min.js'
-  ];
-  var jsqrUrls=[
-    'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
-    'https://unpkg.com/jsqr@1.4.0/dist/jsQR.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js'
-  ];
-  var quaggaUrls=[
-    'https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js',
-    'https://unpkg.com/quagga@0.12.1/dist/quagga.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js'
   ];
 
   function tryLoad(urls,idx,onOk,onAllFail){
@@ -367,29 +367,23 @@ function loadFallbackEngines(){
   }
 
   tryLoad(zxingUrls,0,function(){
-    if(typeof ZXing!=='undefined'){eng='zxing';setEng('ZXing');fireAll();return;}
-    tryQuagga();
-  },tryQuagga);
-
-  function tryQuagga(){
-    tryLoad(quaggaUrls,0,function(){
-      if(typeof Quagga!=='undefined'){eng='quagga';setEng('Quagga');fireAll();return;}
-      tryJsqr();
-    },tryJsqr);
-  }
-
-  function tryJsqr(){
-    tryLoad(jsqrUrls,0,function(){
-      if(typeof jsQR!=='undefined'){eng='jsqr';setEng('jsQR');fireAll();return;}
-      engineLoadFailed();
-    },engineLoadFailed);
-  }
+    if(typeof ZXing!=='undefined'){
+      try{
+        var hints=new Map();
+        hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+        hints.set(ZXing.DecodeHintType.CHARACTER_SET,'UTF-8');
+        zxingReader=new ZXing.BrowserMultiFormatReader(hints);
+        eng='zxing';setEng('ZXing');fireAll();return;
+      }catch(e){}
+    }
+    engineLoadFailed();
+  },engineLoadFailed);
 
   function engineLoadFailed(){
     eng='none';
     setEng('Offline');
     showCamErr('&#128268;','Scan Engine Could Not Load',
-      'This device could not download the QR/barcode scanning library.\n\n\u2022 Check your internet connection\n\u2022 If on a company network, ask IT to allow: cdn.jsdelivr.net, unpkg.com, cdnjs.cloudflare.com\n\u2022 Try a different network (mobile hotspot) to confirm\n\nCamera, Paste and Upload will not detect codes until this loads.',true);
+      'This device could not download the QR/barcode scanning library.\n\n\u2022 Check your internet connection\n\u2022 If on a company network, ask IT to allow: unpkg.com, cdn.jsdelivr.net, cdnjs.cloudflare.com\n\u2022 Try a different network (mobile hotspot) to confirm\n\nCamera, Paste and Upload will not detect codes until this loads.',true);
     fireAll();
   }
 }
@@ -397,17 +391,8 @@ function setEng(l){
   var b=$e('heng');
   b.textContent=l;
   $e('sb-eng').textContent='Engine: '+l;
-  // Color-code + warn clearly when barcodes (not just QR) are NOT
-  // supported, so the user isn't left guessing why a barcode won't scan.
   if(l==='Native'||l==='ZXing'){
     b.style.background='rgba(74,222,128,.15)';b.style.color='#4ade80';
-  } else if(l==='Quagga'){
-    b.style.background='rgba(74,222,128,.15)';b.style.color='#4ade80';
-    b.title='Barcode-specialist engine (1D barcodes) — QR codes not supported by this engine.';
-  } else if(l==='jsQR'){
-    b.style.background='rgba(251,191,36,.15)';b.style.color='#fbbf24';
-    b.textContent='QR only';
-    b.title='Barcode library (ZXing) could not load — only QR codes will scan, not 1D barcodes.';
   } else if(l==='Offline'){
     b.style.background='rgba(239,68,68,.15)';b.style.color='#f87171';
   }
@@ -427,82 +412,31 @@ function dec(canvas,cb){
     });
     return;
   }
-  if(eng==='quagga'){ decQuagga(canvas,cb); return; }
-  var d=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
-  if(eng==='zxing'){
-    try{
-      if(!zxingReader){
-        zxingReader=new ZXing.MultiFormatReader();
-        try{
-          var hints=new Map();
-          hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
-          hints.set(ZXing.DecodeHintType.ASSUME_GS1,false);
-          zxingReader.setHints(hints);
-        }catch(eh){ console.warn('[SmartScan] ZXing hints setup failed (non-fatal):',eh); }
-      }
-      var bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(d.data,canvas.width,canvas.height)));
-      var r=zxingReader.decode(bmp);
+  cb(null); // dec() is now Native-only; ZXing uses decZxingImage/decodeFromVideoDevice instead
+}
+/* Static-image decode for the ZXing engine — uses the same proven
+   high-level API (decodeFromImageUrl) confirmed working in testing,
+   instead of manually building BinaryBitmap/HybridBinarizer ourselves. */
+function decZxingImage(imageUrl,cb){
+  zxingReader.decodeFromImageUrl(imageUrl).then(function(result){
+    if(result){
       var rp=null;
       try{
-        var pts=r.getResultPoints();
+        var pts=result.getResultPoints();
         if(pts&&pts.length){rp=pts.map(function(p){return{x:p.getX(),y:p.getY()};});}
       }catch(e2){}
-      cb({t:r.getText(),f:String(r.getBarcodeFormat()),pts:rp});
-    }catch(e){
-      // ZXing throws a NotFoundException constantly during normal scanning
-      // (every frame with no code in view) — that's routine, NOT an error.
-      // Anything else (TypeError, missing API, etc.) is a REAL bug and
-      // must be surfaced, not silently swallowed as "no code found".
-      var msg=(e&&e.message)||String(e);
-      var name=(e&&e.name)||'';
-      var isRoutineNotFound=/notfound/i.test(name)||/no md5|not found|unable to decode/i.test(msg);
-      if(!isRoutineNotFound){
-        console.error('[SmartScan] ZXing DECODE ERROR (not a routine "not found"):',name,msg,e);
-        cb({error:'ZXing error: '+name+' — '+msg});
-      } else {
-        cb(null);
-      }
-    }
-    return;
-  }
-  if(eng==='jsqr'){
-    var q;
-    try{
-      q=jsQR(d.data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'});
-    }catch(eq){
-      console.error('[SmartScan] jsQR error:',eq);
-      cb({error:'jsQR error: '+(eq&&eq.message||eq)});
-      return;
-    }
-    if(q){
-      var loc=q.location;
-      var pts=loc?[
-        {x:loc.topLeftCorner.x,y:loc.topLeftCorner.y},
-        {x:loc.topRightCorner.x,y:loc.topRightCorner.y},
-        {x:loc.bottomRightCorner.x,y:loc.bottomRightCorner.y},
-        {x:loc.bottomLeftCorner.x,y:loc.bottomLeftCorner.y}
-      ]:null;
-      cb({t:q.data,f:'QR_CODE',pts:pts});
+      cb({t:result.getText(),f:String(result.getBarcodeFormat()),pts:rp});
     } else cb(null);
-    return;
-  }
-  cb(null);
-}
-function decQuagga(canvas,cb){
-  // QuaggaJS's decodeSingle works on a data URL, not raw ImageData —
-  // slightly heavier per-frame than the other engines, acceptable since
-  // it's only used when Native and ZXing are both unavailable.
-  var durl=canvas.toDataURL('image/png');
-  Quagga.decodeSingle({
-    src:durl,
-    numOfWorkers:0,
-    inputStream:{size:Math.max(canvas.width,canvas.height)},
-    decoder:{readers:['ean_reader','ean_8_reader','code_128_reader','code_39_reader','upc_reader','upc_e_reader','codabar_reader','i2of5_reader']},
-    locate:true
-  },function(result){
-    if(result&&result.codeResult&&result.codeResult.code){
-      cb({t:result.codeResult.code,f:(result.codeResult.format||'BARCODE').toUpperCase(),pts:null});
-    } else cb(null);
+  }).catch(function(e){
+    var name=(e&&e.name)||'';
+    var msg=(e&&e.message)||String(e);
+    var isRoutineNotFound=/notfound/i.test(name)||/no md5|not found|unable to decode/i.test(msg);
+    if(!isRoutineNotFound){
+      console.error('[SmartScan] ZXing image decode error:',name,msg,e);
+      cb({error:'ZXing error: '+name+' — '+msg});
+    } else {
+      cb(null);
+    }
   });
 }
 
@@ -545,11 +479,12 @@ function showRes(text,format,addH){
 }
 
 /* ── Scanned-codes preview strip (camera tab) ── */
-var scanStripItems=[]; // {text,format,type,count}
+var scanStripItems=[]; // {text,format,type,count,firstTime,lastTime}
 function addToScanStrip(text,format,type){
+  var now=new Date();
   var existing=scanStripItems.filter(function(it){return it.text===text;})[0];
-  if(existing){ existing.count++; }
-  else{ existing={text:text,format:format,type:type,count:1}; scanStripItems.push(existing); }
+  if(existing){ existing.count++; existing.lastTime=now; }
+  else{ existing={text:text,format:format,type:type,count:1,firstTime:now,lastTime:now}; scanStripItems.push(existing); }
   renderScanStrip(existing.text);
 }
 function renderScanStrip(highlightText){
@@ -562,13 +497,30 @@ function renderScanStrip(highlightText){
     d.className='ss-item'+(it.text===highlightText?' ss-new':'');
     d.innerHTML='<div class="ss-item-ico">'+(icoMap[it.type]||'&#128196;')+'</div>'+
       '<div class="ss-item-lbl">'+esc(it.text.substring(0,10))+'</div>'+
-      (it.count>1?'<div class="ss-item-count">'+it.count+'</div>':'');
+      (it.count>1?'<div class="ss-item-count">'+it.count+'</div>':'')+
+      '<button class="ss-item-copy" title="Copy">&#128203;</button>';
     d.title=it.text;
-    d.onclick=function(){
+    d.onclick=function(e){
+      if(e.target.closest('.ss-item-copy')) return; // handled separately below
       showRes(it.text,it.format,false);
       document.querySelectorAll('.ss-item').forEach(function(x){x.classList.remove('active');});
       d.classList.add('active');
     };
+    var copyBtn=d.querySelector('.ss-item-copy');
+    copyBtn.addEventListener('click',function(e){
+      e.stopPropagation();
+      if(navigator.clipboard){
+        navigator.clipboard.writeText(it.text).then(function(){
+          copyBtn.innerHTML='&#10003;';
+          setTimeout(function(){copyBtn.innerHTML='&#128203;';},1200);
+        });
+      } else {
+        var ta=document.createElement('textarea');ta.value=it.text;
+        ta.style.cssText='position:fixed;opacity:0;';document.body.appendChild(ta);
+        ta.select();document.execCommand('copy');ta.remove();
+        copyBtn.innerHTML='&#10003;';setTimeout(function(){copyBtn.innerHTML='&#128203;';},1200);
+      }
+    });
     wrap.appendChild(d);
     if(it.text===highlightText) setTimeout(function(){d.classList.remove('ss-new');},400);
   });
@@ -577,6 +529,46 @@ function clearScanStrip(){
   scanStripItems=[];
   $e('scan-strip').innerHTML='';
   $e('scan-strip-count').textContent='0';
+}
+
+/* ── Export All — CSV with code, format, date, time, scanned-by ── */
+var _scanUser='', _scanUserEmail='';
+(function(){
+  try{
+    var params=new URLSearchParams(window.location.search);
+    _scanUser=params.get('user')||'';
+    _scanUserEmail=params.get('email')||'';
+  }catch(e){}
+})();
+function exportAllScans(){
+  if(!scanStripItems.length){ alert('No scans to export yet.'); return; }
+  var rows=[['Code / Text','Format','Scan Count','First Scanned Date','First Scanned Time','Last Scanned Date','Last Scanned Time','Scanned By','Email']];
+  scanStripItems.forEach(function(it){
+    rows.push([
+      it.text,
+      it.format||'',
+      it.count,
+      it.firstTime.toLocaleDateString(),
+      it.firstTime.toLocaleTimeString(),
+      it.lastTime.toLocaleDateString(),
+      it.lastTime.toLocaleTimeString(),
+      _scanUser||'Unknown',
+      _scanUserEmail||''
+    ]);
+  });
+  var csv=rows.map(function(r){
+    return r.map(function(cell){
+      var s=String(cell).replace(/"/g,'""');
+      return /[",\n]/.test(s) ? '"'+s+'"' : s;
+    }).join(',');
+  }).join('\r\n');
+  var blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  var stamp=new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  a.href=url;a.download='SmartScan_Export_'+stamp+'.csv';
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(function(){URL.revokeObjectURL(url);},2000);
 }
 function renderTable(text){
   var rows=text.trim().split('\n');
@@ -622,10 +614,12 @@ function startCam(withFS){
   $e('start-scr').style.display='none';
   $e('cam-err').style.display='none';
   $e('loading').style.display='flex';
+  $e('ld-txt').textContent='Preparing scanner...';
   // Defensive cleanup — if a previous stream handle is still around
   // (e.g. from a retry after a timeout), fully release it first so the
   // new getUserMedia call doesn't fight over the same camera resource.
   if(stream){ try{stream.getTracks().forEach(function(t){t.stop();});}catch(e0){} stream=null; }
+  if(zxingReader){ try{zxingReader.reset();}catch(e0){} }
   /* Auto-fullscreen on user gesture for app feel */
   if(withFS&&!fsMode){
     try{
@@ -637,6 +631,83 @@ function startCam(withFS){
   }
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
     showCamErr('&#128683;','Not Supported','Camera API not available.\nUse Chrome, Edge or Safari.',false);return;}
+
+  // Decide the scanning method ONLY after the engine has finished loading —
+  // Native gets our full manual pipeline (shutter-check, detection box,
+  // etc.); ZXing uses its own proven decodeFromVideoDevice (manages its
+  // own camera stream internally, so we must NOT also open one ourselves).
+  initEng(function(){
+    if(eng==='zxing') startCamZxing();
+    else startCamNative();
+  });
+}
+
+/* ── ZXing high-level camera path (proven decodeFromVideoDevice API) ── */
+function startCamZxing(){
+  $e('ld-txt').textContent='Requesting camera...';
+  // Pick a device matching the desired facing direction so Flip Camera
+  // actually works with the ZXing engine too (decodeFromVideoDevice
+  // itself doesn't take a facingMode constraint, only a deviceId).
+  navigator.mediaDevices.enumerateDevices().then(function(devices){
+    var vids=devices.filter(function(d){return d.kind==='videoinput';});
+    var deviceId=null;
+    if(vids.length>1){
+      var wantBack=(facing==='environment');
+      var match=vids.find(function(d){
+        var l=(d.label||'').toLowerCase();
+        return wantBack ? /back|rear|environment/.test(l) : /front|user|face/.test(l);
+      });
+      if(match) deviceId=match.deviceId;
+      else deviceId=wantBack?vids[vids.length-1].deviceId:vids[0].deviceId; // heuristic: back camera often listed last
+    }
+    runZxingDecode(deviceId);
+  }).catch(function(){ runZxingDecode(null); });
+}
+function runZxingDecode(deviceId){
+  zxingReader.decodeFromVideoDevice(deviceId,'vid',function(result,err){
+    if(result){
+      var pts=null;
+      try{
+        var rp=result.getResultPoints();
+        if(rp&&rp.length) pts=rp.map(function(p){return{x:p.getX(),y:p.getY()};});
+      }catch(e2){}
+      var v=$e('vid');
+      if(pts&&v) drawDetBox(pts,v);
+      var text=result.getText(),fmt=String(result.getBarcodeFormat());
+      if(text!==last){
+        last=text;beep();
+        $e('badge').textContent='\u2713 Found!';$e('badge').className='found';
+        showRes(text,fmt,true);
+        setTimeout(function(){$e('badge').textContent='Scanning...';$e('badge').className='';last='';clearDetBox();},700);
+      }
+    }
+    // NotFoundException fires continuously while no code is in view — routine, ignore.
+  }).then(function(){
+    // Called once the stream is attached and decode loop has started
+    var v=$e('vid');
+    v.style.display='block';
+    stream=v.srcObject; // keep a reference so stopCam()/flipCam() can manage it
+    $e('loading').style.display='none';
+    $e('overlay').style.display='block';
+    $e('badge').style.display='block';
+    $e('cam-ctl').style.display='flex';
+  }).catch(function(e){
+    var ico,title,msg,retry=true;
+    if(e.name==='NotAllowedError'||e.name==='PermissionDeniedError'){
+      ico='&#128274;';title='Camera Access Denied';
+      msg='To allow:\n\u2022 Chrome: lock icon in address bar \u2192 Camera \u2192 Allow\n\u2022 Android: Site Settings \u2192 Camera\n\u2022 iPhone: Settings \u2192 Safari \u2192 Camera\n\nTap Try Again.';}
+    else if(e.name==='NotFoundError'){ico='&#128683;';title='No Camera Found';
+      msg='No camera detected.\n\u2022 Check Device Manager\n\u2022 Install driver\n\u2022 Try external webcam\n\nOr use Paste/Upload tabs.';retry=false;}
+    else if(e.name==='NotReadableError'){ico='&#127906;';title='Shutter Closed / In Use';
+      msg='\u2022 Open camera shutter (Lenovo/Dell/HP)\n\u2022 Close Zoom/Teams/Meet\n\u2022 Restart browser';}
+    else{ico='&#9888;&#65039;';title='Camera Error';msg=e.message||e.name||'Unknown';}
+    showCamErr(ico,title,msg,retry);
+  });
+}
+
+/* ── Native BarcodeDetector camera path (full manual pipeline, unchanged) ── */
+function startCamNative(){
+  $e('ld-txt').textContent='Requesting camera...';
   navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1280},height:{ideal:720}},audio:false})
   .then(function(s){
     stream=s;var v=$e('vid');v.srcObject=s;v.style.display='block';
@@ -666,17 +737,7 @@ function startCam(withFS){
         $e('overlay').style.display='block';
         $e('badge').style.display='block';
         $e('cam-ctl').style.display='flex';
-        initEng(function(){
-          if(eng==='none'){
-            $e('badge').textContent='\u26A0 Scan engine offline';
-            $e('badge').className='found';
-            $e('badge').style.background='rgba(239,68,68,.15)';
-            $e('badge').style.borderColor='rgba(239,68,68,.3)';
-            $e('badge').style.color='#f87171';
-          } else {
-            scan();
-          }
-        });
+        scan();
       }
       setTimeout(checkFrame,500);
     }).catch(function(pe){showCamErr('&#128683;','Playback Error',pe.message||'Failed',true);});};
@@ -690,7 +751,7 @@ function startCam(withFS){
     if((e.name==='AbortError'||/timeout/i.test(e.message||''))&&camRetries<2){
       camRetries++;
       $e('ld-txt').textContent='Camera busy, retrying... ('+camRetries+'/2)';
-      setTimeout(function(){startCam();},1200);
+      setTimeout(function(){startCamNative();},1200);
       return;
     }
     var ico,title,msg,retry=true;
@@ -881,6 +942,7 @@ function scan(){raf=requestAnimationFrame(function(){
   scan();});}
 function flipCam(){facing=facing==='environment'?'user':'environment';
   if(stream)stream.getTracks().forEach(function(t){t.stop();});stream=null;
+  if(zxingReader){try{zxingReader.reset();}catch(e){}}
   if(raf)cancelAnimationFrame(raf);raf=null;last='';startCam(false);}
 function toggleFS(){
   if(!document.fullscreenElement&&!document.webkitFullscreenElement){
@@ -894,8 +956,12 @@ function toggleFS(){
     fsMode=false;}}
 function closeMe(){if(raf)cancelAnimationFrame(raf);
   if(stream)stream.getTracks().forEach(function(t){t.stop();});
+  if(zxingReader){try{zxingReader.reset();}catch(e){}}
   window.close();}
-window.onbeforeunload=function(){if(stream)stream.getTracks().forEach(function(t){t.stop();});};
+window.onbeforeunload=function(){
+  if(stream)stream.getTracks().forEach(function(t){t.stop();});
+  if(zxingReader){try{zxingReader.reset();}catch(e){}}
+};
 
 /* ── Paste ── */
 document.addEventListener('paste',function(e){
@@ -907,15 +973,19 @@ document.addEventListener('paste',function(e){
       var blob=items[i].getAsFile();var url=URL.createObjectURL(blob);var img=new Image();
       img.onload=function(){
         $e('paste-prev').src=img.src;$e('paste-prev').style.display='block';
-        var c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
-        c.getContext('2d').drawImage(img,0,0);
         function runDec(){
           $e('paste-sc').style.display='block';$e('paste-sc').textContent='Scanning...';$e('paste-sc').style.color='#4CC2FF';
-          dec(c,function(r){
+          function onResult(r){
             if(r&&r.t){$e('paste-sc').style.display='none';beep();showRes(r.t,r.f,true);}
             else if(r&&r.error){$e('paste-sc').style.color='#f87171';$e('paste-sc').textContent='Scan error: '+r.error;}
             else{$e('paste-sc').style.color='#f87171';$e('paste-sc').textContent=(eng==='none')?'Scan engine offline — check connection':'No code found in this image (engine: '+eng+')';}
-          });
+          }
+          if(eng==='zxing'){ decZxingImage(url,onResult); }
+          else{
+            var c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+            c.getContext('2d').drawImage(img,0,0);
+            dec(c,onResult);
+          }
         }
         if(engReady) runDec();
         else { $e('paste-sc').style.display='block'; $e('paste-sc').textContent='Loading scan engine...'; pendingScans.push(runDec); }
@@ -931,15 +1001,19 @@ function procFile(file){
   rd.onload=function(ev){var img=new Image();
     img.onload=function(){
       $e('up-prev').src=img.src;$e('up-prev').style.display='block';
-      var c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
-      c.getContext('2d').drawImage(img,0,0);
       function runDec(){
         $e('up-sc').style.display='block';$e('up-sc').textContent='Scanning...';$e('up-sc').style.color='#4CC2FF';
-        dec(c,function(r){
+        function onResult(r){
           if(r&&r.t){$e('up-sc').style.display='none';beep();showRes(r.t,r.f,true);}
           else if(r&&r.error){$e('up-sc').style.color='#f87171';$e('up-sc').textContent='Scan error: '+r.error;}
           else{$e('up-sc').style.color='#f87171';$e('up-sc').textContent=(eng==='none')?'Scan engine offline — check connection':'No code found in this image (engine: '+eng+')';}
-        });
+        }
+        if(eng==='zxing'){ decZxingImage(ev.target.result,onResult); }
+        else{
+          var c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+          c.getContext('2d').drawImage(img,0,0);
+          dec(c,onResult);
+        }
       }
       if(engReady) runDec();
       else { $e('up-sc').style.display='block'; $e('up-sc').textContent='Loading scan engine...'; pendingScans.push(runDec); }
