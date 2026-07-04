@@ -237,17 +237,61 @@ function swTab(id){
 }
 
 /* ── Engine ── */
+var _engInitStarted=false,_engInitCbs=[];
 function initEng(cb){
+  _engInitCbs.push(cb);
+  if(_engInitStarted) return; // already loading/loaded — just queue the callback
+  _engInitStarted=true;
+  function fireAll(){ var cbs=_engInitCbs; _engInitCbs=[]; cbs.forEach(function(f){f();}); }
+
   if(typeof BarcodeDetector!=='undefined'){
     try{det=new BarcodeDetector({formats:['qr_code','ean_13','ean_8','code_128','code_39','code_93','data_matrix','pdf417','upc_a','upc_e','itf','aztec','codabar']});
-    eng='native';setEng('Native');cb();return;}catch(e){}}
-  var s=document.createElement('script');
-  s.src='https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.1/umd/index.min.js';
-  s.onload=function(){if(typeof ZXing!=='undefined'){eng='zxing';setEng('ZXing');cb();return;}
-    var s2=document.createElement('script');s2.src='https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
-    s2.onload=function(){eng=typeof jsQR!=='undefined'?'jsqr':'none';setEng(eng==='jsqr'?'jsQR':'None');cb();};
-    s2.onerror=function(){cb();};document.head.appendChild(s2);};
-  s.onerror=function(){cb();};document.head.appendChild(s);
+    eng='native';setEng('Native');fireAll();return;}catch(e){}}
+
+  // Try ZXing (QR + all barcode formats) from multiple CDN mirrors —
+  // if the primary CDN is blocked by a firewall/proxy, fall through to
+  // alternates before giving up on it entirely.
+  var zxingUrls=[
+    'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.1/umd/index.min.js',
+    'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.1/umd/index.min.js',
+    'https://unpkg.com/@zxing/library@0.21.1/umd/index.min.js'
+  ];
+  var jsqrUrls=[
+    'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
+    'https://unpkg.com/jsqr@1.4.0/dist/jsQR.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js'
+  ];
+
+  function tryLoad(urls,idx,onOk,onAllFail){
+    if(idx>=urls.length){onAllFail();return;}
+    var s=document.createElement('script');
+    s.src=urls[idx];
+    var done=false;
+    var timer=setTimeout(function(){ if(!done){done=true;s.onerror=s.onload=null;tryLoad(urls,idx+1,onOk,onAllFail);} },4000);
+    s.onload=function(){ if(done)return; done=true; clearTimeout(timer); onOk(); };
+    s.onerror=function(){ if(done)return; done=true; clearTimeout(timer); tryLoad(urls,idx+1,onOk,onAllFail); };
+    document.head.appendChild(s);
+  }
+
+  tryLoad(zxingUrls,0,function(){
+    if(typeof ZXing!=='undefined'){eng='zxing';setEng('ZXing');fireAll();return;}
+    tryJsqr();
+  },tryJsqr);
+
+  function tryJsqr(){
+    tryLoad(jsqrUrls,0,function(){
+      if(typeof jsQR!=='undefined'){eng='jsqr';setEng('jsQR');fireAll();return;}
+      engineLoadFailed();
+    },engineLoadFailed);
+  }
+
+  function engineLoadFailed(){
+    eng='none';
+    setEng('Offline');
+    showCamErr('&#128268;','Scan Engine Could Not Load',
+      'This device could not download the QR/barcode scanning library.\n\n\u2022 Check your internet connection\n\u2022 If on a company network, ask IT to allow: cdn.jsdelivr.net, unpkg.com, cdnjs.cloudflare.com\n\u2022 Try a different network (mobile hotspot) to confirm\n\nCamera, Paste and Upload will not detect codes until this loads.',true);
+    fireAll();
+  }
 }
 function setEng(l){$e('heng').textContent=l;$e('sb-eng').textContent='Engine: '+l;}
 
@@ -537,7 +581,7 @@ document.addEventListener('paste',function(e){
           $e('paste-sc').style.display='block';$e('paste-sc').textContent='Scanning...';
           dec(c,function(r){$e('paste-sc').style.display='none';
             if(r&&r.t){beep();showRes(r.t,r.f,true);}
-            else{$e('r-badge').className='error';$e('r-badge').textContent='No code found';}});
+            else{$e('r-badge').className='error';$e('r-badge').textContent=(eng==='none')?'Scan engine offline':'No code found';}});
         }
         if(engReady) runDec();
         else { $e('paste-sc').style.display='block'; $e('paste-sc').textContent='Loading scan engine...'; pendingScans.push(runDec); }
@@ -559,7 +603,7 @@ function procFile(file){
         $e('up-sc').style.display='block';$e('up-sc').textContent='Scanning...';
         dec(c,function(r){$e('up-sc').style.display='none';
           if(r&&r.t){beep();showRes(r.t,r.f,true);}
-          else{$e('r-badge').className='error';$e('r-badge').textContent='No code found';}});
+          else{$e('r-badge').className='error';$e('r-badge').textContent=(eng==='none')?'Scan engine offline':'No code found';}});
       }
       if(engReady) runDec();
       else { $e('up-sc').style.display='block'; $e('up-sc').textContent='Loading scan engine...'; pendingScans.push(runDec); }
