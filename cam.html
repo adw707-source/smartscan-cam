@@ -293,27 +293,40 @@ function initEng(cb){
   if(_engInitStarted) return; // already loading/loaded — just queue the callback
   _engInitStarted=true;
 
-  if(typeof BarcodeDetector!=='undefined'){
-    BarcodeDetector.getSupportedFormats().then(function(supported){
-      var wanted=['qr_code','ean_13','ean_8','code_128','code_39','code_93','data_matrix','pdf417','upc_a','upc_e','itf','aztec','codabar'];
-      var usable=wanted.filter(function(f){return supported.indexOf(f)!==-1;});
-      var hasBarcode=usable.some(function(f){return f!=='qr_code';});
-      if(usable.length){
+  var nativeChecked=false;
+  function nativeFallback(){ if(nativeChecked)return; nativeChecked=true; loadFallbackEngines(); }
+
+  try{
+    if(typeof BarcodeDetector!=='undefined' && typeof BarcodeDetector.getSupportedFormats==='function'){
+      BarcodeDetector.getSupportedFormats().then(function(supported){
         try{
-          det=new BarcodeDetector({formats:usable});
-          eng='native';
-          setEng(hasBarcode?'Native':'Native (QR only)');
-          fireAll();
-          return;
+          var wanted=['qr_code','ean_13','ean_8','code_128','code_39','code_93','data_matrix','pdf417','upc_a','upc_e','itf','aztec','codabar'];
+          var usable=wanted.filter(function(f){return supported.indexOf(f)!==-1;});
+          var hasBarcode=usable.some(function(f){return f!=='qr_code';});
+          if(usable.length){
+            det=new BarcodeDetector({formats:usable});
+            eng='native';
+            setEng(hasBarcode?'Native':'Native (QR only)');
+            nativeChecked=true;
+            fireAll();
+            return;
+          }
         }catch(e){}
-      }
-      // Native exists but doesn't actually support any of our formats on
-      // this platform — fall through to ZXing for full barcode coverage.
-      loadFallbackEngines();
-    }).catch(function(){ loadFallbackEngines(); });
-    return;
+        // Native exists but doesn't actually support any of our formats on
+        // this platform — fall through to ZXing for full barcode coverage.
+        nativeFallback();
+      }).catch(nativeFallback);
+      // Safety net: if the promise never settles for any reason, don't
+      // wait forever — fall back after 3s.
+      setTimeout(nativeFallback,3000);
+    } else {
+      nativeFallback();
+    }
+  }catch(e){
+    // Any synchronous throw here (e.g. getSupportedFormats not actually
+    // callable on this browser) must NEVER silently kill engine loading.
+    nativeFallback();
   }
-  loadFallbackEngines();
 }
 
 function loadFallbackEngines(){
@@ -616,7 +629,17 @@ function startCam(withFS){
         $e('overlay').style.display='block';
         $e('badge').style.display='block';
         $e('cam-ctl').style.display='flex';
-        initEng(function(){scan();});
+        initEng(function(){
+          if(eng==='none'){
+            $e('badge').textContent='\u26A0 Scan engine offline';
+            $e('badge').className='found';
+            $e('badge').style.background='rgba(239,68,68,.15)';
+            $e('badge').style.borderColor='rgba(239,68,68,.3)';
+            $e('badge').style.color='#f87171';
+          } else {
+            scan();
+          }
+        });
       }
       setTimeout(checkFrame,500);
     }).catch(function(pe){showCamErr('&#128683;','Playback Error',pe.message||'Failed',true);});};
@@ -758,10 +781,11 @@ document.addEventListener('paste',function(e){
         var c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
         c.getContext('2d').drawImage(img,0,0);
         function runDec(){
-          $e('paste-sc').style.display='block';$e('paste-sc').textContent='Scanning...';
-          dec(c,function(r){$e('paste-sc').style.display='none';
-            if(r&&r.t){beep();showRes(r.t,r.f,true);}
-            else{$e('r-badge').className='error';$e('r-badge').textContent=(eng==='none')?'Scan engine offline':'No code found';}});
+          $e('paste-sc').style.display='block';$e('paste-sc').textContent='Scanning...';$e('paste-sc').style.color='#4CC2FF';
+          dec(c,function(r){
+            if(r&&r.t){$e('paste-sc').style.display='none';beep();showRes(r.t,r.f,true);}
+            else{$e('paste-sc').style.color='#f87171';$e('paste-sc').textContent=(eng==='none')?'Scan engine offline — check connection':'No code found in this image';}
+          });
         }
         if(engReady) runDec();
         else { $e('paste-sc').style.display='block'; $e('paste-sc').textContent='Loading scan engine...'; pendingScans.push(runDec); }
@@ -780,10 +804,11 @@ function procFile(file){
       var c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
       c.getContext('2d').drawImage(img,0,0);
       function runDec(){
-        $e('up-sc').style.display='block';$e('up-sc').textContent='Scanning...';
-        dec(c,function(r){$e('up-sc').style.display='none';
-          if(r&&r.t){beep();showRes(r.t,r.f,true);}
-          else{$e('r-badge').className='error';$e('r-badge').textContent=(eng==='none')?'Scan engine offline':'No code found';}});
+        $e('up-sc').style.display='block';$e('up-sc').textContent='Scanning...';$e('up-sc').style.color='#4CC2FF';
+        dec(c,function(r){
+          if(r&&r.t){$e('up-sc').style.display='none';beep();showRes(r.t,r.f,true);}
+          else{$e('up-sc').style.color='#f87171';$e('up-sc').textContent=(eng==='none')?'Scan engine offline — check connection':'No code found in this image';}
+        });
       }
       if(engReady) runDec();
       else { $e('up-sc').style.display='block'; $e('up-sc').textContent='Loading scan engine...'; pendingScans.push(runDec); }
