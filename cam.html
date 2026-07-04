@@ -26,7 +26,23 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
 .page{display:none;flex:1;flex-direction:column;overflow:auto;}
 .page.show{display:flex;}
 /* ── Camera page ── */
-#pg-cam{padding:0;position:relative;background:#000;}
+#pg-cam{padding:0;display:flex;flex-direction:column;}
+#cam-viewport{position:relative;flex:1;overflow:hidden;background:#000;min-height:0;}
+#scan-strip-wrap{flex-shrink:0;background:#12161f;border-top:1px solid rgba(255,255,255,.07);max-height:130px;display:flex;flex-direction:column;}
+#scan-strip-hdr{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;flex-shrink:0;}
+#scan-strip-title{font-size:10.5px;font-weight:700;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.5px;}
+#scan-strip-count{display:inline-block;background:rgba(76,194,255,.15);color:#4CC2FF;border-radius:20px;padding:1px 7px;margin-left:5px;font-size:10px;}
+#scan-strip-close{background:rgba(255,255,255,.06);border:none;color:rgba(255,255,255,.5);font-size:10px;padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit;}
+#scan-strip-close:hover{background:rgba(239,68,68,.15);color:#f87171;}
+#scan-strip{display:flex;gap:6px;overflow-x:auto;padding:0 10px 8px;flex:1;}
+.ss-item{flex-shrink:0;width:64px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:5px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);position:relative;}
+.ss-item:hover{background:rgba(76,194,255,.08);border-color:rgba(76,194,255,.25);}
+.ss-item.active{background:rgba(76,194,255,.14);border-color:#4CC2FF;}
+.ss-item-ico{font-size:18px;}
+.ss-item-lbl{font-size:8.5px;color:rgba(255,255,255,.5);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;}
+.ss-item-count{position:absolute;top:-4px;right:-4px;background:#4CC2FF;color:#0a0e16;font-size:9px;font-weight:800;border-radius:50%;width:16px;height:16px;display:flex;align-items:center;justify-content:center;}
+@keyframes ss-in{0%{opacity:0;transform:scale(.7);}100%{opacity:1;transform:scale(1);}}
+.ss-item.ss-new{animation:ss-in .3s ease;}
 #vid{width:100%;height:100%;object-fit:cover;display:none;position:absolute;inset:0;}
 #overlay{position:absolute;inset:0;pointer-events:none;display:none;z-index:2;}
 #cut{display:none;}
@@ -128,29 +144,40 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
   <div id="left">
     <!-- CAMERA -->
     <div class="page show" id="pg-cam">
-      <video id="vid" autoplay playsinline muted webkit-playsinline></video>
-      <canvas id="detCanvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3;"></canvas>
-      <div id="overlay">
-        <div id="cut"></div>
-        <div id="frm"><div class="cor tl"></div><div class="cor tr"></div><div class="cor bl"></div><div class="cor br"></div><div id="sline"></div></div>
+      <div id="cam-viewport">
+        <video id="vid" autoplay playsinline muted webkit-playsinline></video>
+        <canvas id="detCanvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3;"></canvas>
+        <div id="overlay">
+          <div id="cut"></div>
+          <div id="frm"><div class="cor tl"></div><div class="cor tr"></div><div class="cor bl"></div><div class="cor br"></div><div id="sline"></div></div>
+        </div>
+        <div id="badge">Scanning...</div>
+        <div id="cam-ctl">
+          <button class="cbtn" onclick="flipCam()">&#128260;</button>
+          <button class="cbtn" onclick="toggleFS()">&#x26F6;</button>
+        </div>
+        <div id="start-scr">
+          <div id="start-ico">&#128247;</div>
+          <div id="start-title">SmartScan Camera</div>
+          <div id="start-sub">Tap below to start scanning.<br>Browser will ask camera permission once &#8212; tap <b style="color:#fff">Allow</b>.</div>
+          <button id="start-btn" onclick="startCam(true)">&#128247; Start Scanning</button>
+        </div>
+        <div id="loading"><div class="sp"></div><div id="ld-txt">Requesting camera...</div></div>
+        <div id="cam-err">
+          <div id="err-ico">&#128683;</div>
+          <div id="err-title">Error</div>
+          <div id="errmsg"></div>
+          <button id="retry-btn" onclick="startCam(true)">&#8635; Try Again</button>
+        </div>
       </div>
-      <div id="badge">Scanning...</div>
-      <div id="cam-ctl">
-        <button class="cbtn" onclick="flipCam()">&#128260;</button>
-        <button class="cbtn" onclick="toggleFS()">&#x26F6;</button>
-      </div>
-      <div id="start-scr">
-        <div id="start-ico">&#128247;</div>
-        <div id="start-title">SmartScan Camera</div>
-        <div id="start-sub">Tap below to start scanning.<br>Browser will ask camera permission once &#8212; tap <b style="color:#fff">Allow</b>.</div>
-        <button id="start-btn" onclick="startCam(true)">&#128247; Start Scanning</button>
-      </div>
-      <div id="loading"><div class="sp"></div><div id="ld-txt">Requesting camera...</div></div>
-      <div id="cam-err">
-        <div id="err-ico">&#128683;</div>
-        <div id="err-title">Error</div>
-        <div id="errmsg"></div>
-        <button id="retry-btn" onclick="startCam(true)">&#8635; Try Again</button>
+
+      <!-- Scanned items preview strip — small boxes, count badge, click to preview -->
+      <div id="scan-strip-wrap">
+        <div id="scan-strip-hdr">
+          <span id="scan-strip-title">Scanned Codes <span id="scan-strip-count">0</span></span>
+          <button id="scan-strip-close" onclick="clearScanStrip()" title="Clear all">&#128465; Clear</button>
+        </div>
+        <div id="scan-strip"></div>
       </div>
     </div>
     <!-- PASTE -->
@@ -221,13 +248,35 @@ function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace
 function beep(){try{var a=new Audio(BEEP);a.volume=0.8;a.play().catch(function(){});}catch(e){}}
 
 /* ── Tabs ── */
+var camWasActive=false; // tracks whether the user had camera running before switching away
 function swTab(id){
+  var wasCam = $e('pg-cam').classList.contains('show');
   ['cam','paste','upload','hist'].forEach(function(t){
     $e('pg-'+t).classList.remove('show');
     $e('t-'+t).classList.remove('on');
   });
   $e('pg-'+id).classList.add('show');
   $e('t-'+id).classList.add('on');
+
+  if(id!=='cam' && wasCam){
+    // Leaving the Camera tab — stop the stream/scan loop so the camera
+    // is fully off while the user is on Paste/Upload/History (privacy +
+    // saves battery), matching how a real OS only runs camera hardware
+    // while its app is in the foreground.
+    camWasActive = !!stream;
+    if(raf){cancelAnimationFrame(raf);raf=null;}
+    if(stream){stream.getTracks().forEach(function(t){t.stop();});stream=null;}
+    $e('vid').style.display='none';
+    $e('overlay').style.display='none';
+    $e('badge').style.display='none';
+    $e('cam-ctl').style.display='none';
+    clearDetBox();
+  } else if(id==='cam' && !wasCam && camWasActive){
+    // Returning to the Camera tab after having used it before — resume
+    // automatically (permission already granted, no need to re-prompt).
+    startCam(false);
+  }
+
   if(id==='paste'){
     // Focus the paste target so Ctrl+V is actually captured (Chrome
     // requires a focused editable element for image paste to fire).
@@ -282,6 +331,11 @@ function loadFallbackEngines(){
     'https://unpkg.com/jsqr@1.4.0/dist/jsQR.min.js',
     'https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js'
   ];
+  var quaggaUrls=[
+    'https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js',
+    'https://unpkg.com/quagga@0.12.1/dist/quagga.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js'
+  ];
 
   function tryLoad(urls,idx,onOk,onAllFail){
     if(idx>=urls.length){onAllFail();return;}
@@ -296,8 +350,15 @@ function loadFallbackEngines(){
 
   tryLoad(zxingUrls,0,function(){
     if(typeof ZXing!=='undefined'){eng='zxing';setEng('ZXing');fireAll();return;}
-    tryJsqr();
-  },tryJsqr);
+    tryQuagga();
+  },tryQuagga);
+
+  function tryQuagga(){
+    tryLoad(quaggaUrls,0,function(){
+      if(typeof Quagga!=='undefined'){eng='quagga';setEng('Quagga');fireAll();return;}
+      tryJsqr();
+    },tryJsqr);
+  }
 
   function tryJsqr(){
     tryLoad(jsqrUrls,0,function(){
@@ -322,6 +383,9 @@ function setEng(l){
   // supported, so the user isn't left guessing why a barcode won't scan.
   if(l==='Native'||l==='ZXing'){
     b.style.background='rgba(74,222,128,.15)';b.style.color='#4ade80';
+  } else if(l==='Quagga'){
+    b.style.background='rgba(74,222,128,.15)';b.style.color='#4ade80';
+    b.title='Barcode-specialist engine (1D barcodes) — QR codes not supported by this engine.';
   } else if(l==='jsQR'){
     b.style.background='rgba(251,191,36,.15)';b.style.color='#fbbf24';
     b.textContent='QR only';
@@ -342,6 +406,7 @@ function dec(canvas,cb){
     }).catch(function(){cb(null);});
     return;
   }
+  if(eng==='quagga'){ decQuagga(canvas,cb); return; }
   var d=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
   if(eng==='zxing'){
     try{
@@ -372,6 +437,23 @@ function dec(canvas,cb){
     return;
   }
   cb(null);
+}
+function decQuagga(canvas,cb){
+  // QuaggaJS's decodeSingle works on a data URL, not raw ImageData —
+  // slightly heavier per-frame than the other engines, acceptable since
+  // it's only used when Native and ZXing are both unavailable.
+  var durl=canvas.toDataURL('image/png');
+  Quagga.decodeSingle({
+    src:durl,
+    numOfWorkers:0,
+    inputStream:{size:Math.max(canvas.width,canvas.height)},
+    decoder:{readers:['ean_reader','ean_8_reader','code_128_reader','code_39_reader','upc_reader','upc_e_reader','codabar_reader','i2of5_reader']},
+    locate:true
+  },function(result){
+    if(result&&result.codeResult&&result.codeResult.code){
+      cb({t:result.codeResult.code,f:(result.codeResult.format||'BARCODE').toUpperCase(),pts:null});
+    } else cb(null);
+  });
 }
 
 /* ── Result ── */
@@ -408,7 +490,43 @@ function showRes(text,format,addH){
     var n=new Date();
     history.push({text:text,format:fl,time:n.toLocaleTimeString(),date:n.toLocaleDateString()});
     if(history.length>50)history.shift();
+    addToScanStrip(text,fl,type);
   }
+}
+
+/* ── Scanned-codes preview strip (camera tab) ── */
+var scanStripItems=[]; // {text,format,type,count}
+function addToScanStrip(text,format,type){
+  var existing=scanStripItems.filter(function(it){return it.text===text;})[0];
+  if(existing){ existing.count++; }
+  else{ existing={text:text,format:format,type:type,count:1}; scanStripItems.push(existing); }
+  renderScanStrip(existing.text);
+}
+function renderScanStrip(highlightText){
+  var wrap=$e('scan-strip');
+  $e('scan-strip-count').textContent=scanStripItems.length;
+  wrap.innerHTML='';
+  var icoMap={url:'&#128279;',json:'&#123;&#125;',table:'&#128202;',text:'&#128196;'};
+  scanStripItems.slice().reverse().forEach(function(it){
+    var d=document.createElement('div');
+    d.className='ss-item'+(it.text===highlightText?' ss-new':'');
+    d.innerHTML='<div class="ss-item-ico">'+(icoMap[it.type]||'&#128196;')+'</div>'+
+      '<div class="ss-item-lbl">'+esc(it.text.substring(0,10))+'</div>'+
+      (it.count>1?'<div class="ss-item-count">'+it.count+'</div>':'');
+    d.title=it.text;
+    d.onclick=function(){
+      showRes(it.text,it.format,false);
+      document.querySelectorAll('.ss-item').forEach(function(x){x.classList.remove('active');});
+      d.classList.add('active');
+    };
+    wrap.appendChild(d);
+    if(it.text===highlightText) setTimeout(function(){d.classList.remove('ss-new');},400);
+  });
+}
+function clearScanStrip(){
+  scanStripItems=[];
+  $e('scan-strip').innerHTML='';
+  $e('scan-strip-count').textContent='0';
 }
 function renderTable(text){
   var rows=text.trim().split('\n');
@@ -594,7 +712,13 @@ function scan(){raf=requestAnimationFrame(function(){
             last=r.t;beep();
             $e('badge').textContent='\u2713 Found!';$e('badge').className='found';
             showRes(r.t,r.f,true);
-            setTimeout(function(){$e('badge').textContent='Scanning...';$e('badge').className='';last='';},1500);
+            // Clear quickly so the camera is "ready" again and the SAME
+            // code can be scanned again continuously (like a real
+            // barcode-scanner gun repeating on the same label).
+            setTimeout(function(){
+              $e('badge').textContent='Scanning...';$e('badge').className='';
+              last='';clearDetBox();
+            },700);
           }
         } else {
           clearDetBox();
