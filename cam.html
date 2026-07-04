@@ -26,7 +26,7 @@ body{background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFo
 .page{display:none;flex:1;flex-direction:column;overflow:auto;}
 .page.show{display:flex;}
 /* ── Camera page ── */
-#pg-cam{padding:0;display:flex;flex-direction:column;}
+#pg-cam{padding:0;flex-direction:column;} /* display controlled by .page/.page.show only — was a duplicate display:flex here that overrode the hide-when-inactive rule via ID specificity */
 #cam-viewport{position:relative;flex:1;overflow:hidden;background:#000;min-height:0;}
 #scan-strip-wrap{flex-shrink:0;background:#12161f;border-top:1px solid rgba(255,255,255,.07);max-height:130px;display:flex;flex-direction:column;}
 #scan-strip-hdr{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;flex-shrink:0;}
@@ -254,10 +254,13 @@ var camWasActive=false; // tracks whether the user had camera running before swi
 function swTab(id){
   var wasCam = $e('pg-cam').classList.contains('show');
   ['cam','paste','upload','hist'].forEach(function(t){
-    $e('pg-'+t).classList.remove('show');
+    var el=$e('pg-'+t);
+    el.classList.remove('show');
+    el.style.display='none'; // explicit inline override — guarantees exclusivity regardless of any CSS specificity issue
     $e('t-'+t).classList.remove('on');
   });
   $e('pg-'+id).classList.add('show');
+  $e('pg-'+id).style.display='flex';
   $e('t-'+id).classList.add('on');
 
   if(id!=='cam' && wasCam){
@@ -418,7 +421,10 @@ function dec(canvas,cb){
         var pts=r[0].cornerPoints||null;
         cb({t:r[0].rawValue,f:String(r[0].format),pts:pts});
       } else cb(null);
-    }).catch(function(){cb(null);});
+    }).catch(function(e){
+      console.error('[SmartScan] Native BarcodeDetector error:',e);
+      cb({error:'Native detector: '+(e&&e.message||e)});
+    });
     return;
   }
   if(eng==='quagga'){ decQuagga(canvas,cb); return; }
@@ -432,7 +438,7 @@ function dec(canvas,cb){
           hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
           hints.set(ZXing.DecodeHintType.ASSUME_GS1,false);
           zxingReader.setHints(hints);
-        }catch(eh){}
+        }catch(eh){ console.warn('[SmartScan] ZXing hints setup failed (non-fatal):',eh); }
       }
       var bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(d.data,canvas.width,canvas.height)));
       var r=zxingReader.decode(bmp);
@@ -442,11 +448,32 @@ function dec(canvas,cb){
         if(pts&&pts.length){rp=pts.map(function(p){return{x:p.getX(),y:p.getY()};});}
       }catch(e2){}
       cb({t:r.getText(),f:String(r.getBarcodeFormat()),pts:rp});
-    }catch(e){cb(null);}
+    }catch(e){
+      // ZXing throws a NotFoundException constantly during normal scanning
+      // (every frame with no code in view) — that's routine, NOT an error.
+      // Anything else (TypeError, missing API, etc.) is a REAL bug and
+      // must be surfaced, not silently swallowed as "no code found".
+      var msg=(e&&e.message)||String(e);
+      var name=(e&&e.name)||'';
+      var isRoutineNotFound=/notfound/i.test(name)||/no md5|not found|unable to decode/i.test(msg);
+      if(!isRoutineNotFound){
+        console.error('[SmartScan] ZXing DECODE ERROR (not a routine "not found"):',name,msg,e);
+        cb({error:'ZXing error: '+name+' — '+msg});
+      } else {
+        cb(null);
+      }
+    }
     return;
   }
   if(eng==='jsqr'){
-    var q=jsQR(d.data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'});
+    var q;
+    try{
+      q=jsQR(d.data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'});
+    }catch(eq){
+      console.error('[SmartScan] jsQR error:',eq);
+      cb({error:'jsQR error: '+(eq&&eq.message||eq)});
+      return;
+    }
     if(q){
       var loc=q.location;
       var pts=loc?[
@@ -886,7 +913,8 @@ document.addEventListener('paste',function(e){
           $e('paste-sc').style.display='block';$e('paste-sc').textContent='Scanning...';$e('paste-sc').style.color='#4CC2FF';
           dec(c,function(r){
             if(r&&r.t){$e('paste-sc').style.display='none';beep();showRes(r.t,r.f,true);}
-            else{$e('paste-sc').style.color='#f87171';$e('paste-sc').textContent=(eng==='none')?'Scan engine offline — check connection':'No code found in this image';}
+            else if(r&&r.error){$e('paste-sc').style.color='#f87171';$e('paste-sc').textContent='Scan error: '+r.error;}
+            else{$e('paste-sc').style.color='#f87171';$e('paste-sc').textContent=(eng==='none')?'Scan engine offline — check connection':'No code found in this image (engine: '+eng+')';}
           });
         }
         if(engReady) runDec();
@@ -909,7 +937,8 @@ function procFile(file){
         $e('up-sc').style.display='block';$e('up-sc').textContent='Scanning...';$e('up-sc').style.color='#4CC2FF';
         dec(c,function(r){
           if(r&&r.t){$e('up-sc').style.display='none';beep();showRes(r.t,r.f,true);}
-          else{$e('up-sc').style.color='#f87171';$e('up-sc').textContent=(eng==='none')?'Scan engine offline — check connection':'No code found in this image';}
+          else if(r&&r.error){$e('up-sc').style.color='#f87171';$e('up-sc').textContent='Scan error: '+r.error;}
+          else{$e('up-sc').style.color='#f87171';$e('up-sc').textContent=(eng==='none')?'Scan engine offline — check connection':'No code found in this image (engine: '+eng+')';}
         });
       }
       if(engReady) runDec();
